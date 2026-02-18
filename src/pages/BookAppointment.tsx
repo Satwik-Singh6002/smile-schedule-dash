@@ -122,26 +122,25 @@ export default function BookAppointment() {
   }, []);
 
   // Fetch blocked slots + already-booked appointments when dentist or date changes
+  // Also subscribes to real-time changes so admin slot updates reflect immediately
   useEffect(() => {
     if (!selectedDentist || !selectedDate) {
       setBookedSlots([]);
       return;
     }
-    const dayName = DAYS[selectedDate.getDay()]; // e.g. "Mon"
+
+    const dayName = DAYS[selectedDate.getDay()];
     const dentistObj = dentists.find(d => d.id === selectedDentist);
-    const dateString = selectedDate.toDateString(); // e.g. "Mon Feb 19 2026"
+    const dateString = selectedDate.toDateString();
 
     const fetchUnavailableSlots = async () => {
       setLoadingSlots(true);
-
-      // Fetch admin-blocked slots (by day of week)
       const [blockedRes, appointmentsRes] = await Promise.all([
         supabase
           .from("blocked_slots")
           .select("slot")
           .eq("dentist_id", selectedDentist)
           .eq("day", dayName),
-        // Fetch already-booked appointments for this dentist on this exact date
         supabase
           .from("appointments")
           .select("time")
@@ -149,16 +148,23 @@ export default function BookAppointment() {
           .eq("date", dateString)
           .in("status", ["pending", "confirmed"]),
       ]);
-
       const blocked = (blockedRes.data || []).map((r: { slot: string }) => r.slot);
       const booked = (appointmentsRes.data || []).map((r: { time: string }) => r.time);
-
-      // Combine both sets — union of blocked + already booked
       setBookedSlots(Array.from(new Set([...blocked, ...booked])));
       setLoadingSlots(false);
     };
 
     fetchUnavailableSlots();
+
+    // Real-time: re-fetch whenever admin blocks/unblocks slots
+    const channel = supabase
+      .channel(`booking_slots_${selectedDentist}_${dayName}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "blocked_slots" }, () => {
+        fetchUnavailableSlots();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [selectedDentist, selectedDate, dentists]);
 
   const canNext = () => {
