@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { ImageIcon } from "lucide-react";
+
 
 interface GalleryImage {
   id: number;
@@ -10,6 +10,17 @@ interface GalleryImage {
   caption: string | null;
   created_at: string;
 }
+
+const DEMO_IMAGES: GalleryImage[] = [
+  { id: -1, url: "https://images.unsplash.com/photo-1629909613654-28e377c37b09?w=800&q=80", caption: "Modern treatment room", created_at: "" },
+  { id: -2, url: "https://images.unsplash.com/photo-1606811841689-23dfddce3e95?w=800&q=80", caption: "Our friendly dental team", created_at: "" },
+  { id: -3, url: "https://images.unsplash.com/photo-1588776814546-1ffbb172f6f3?w=800&q=80", caption: "State-of-the-art equipment", created_at: "" },
+  { id: -4, url: "https://images.unsplash.com/photo-1607613009820-a29f7bb81c04?w=800&q=80", caption: "Comfortable waiting area", created_at: "" },
+  { id: -5, url: "https://images.unsplash.com/photo-1609840114035-3c981b782dfe?w=800&q=80", caption: "Digital X-ray suite", created_at: "" },
+  { id: -6, url: "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=800&q=80", caption: "Patient consultation room", created_at: "" },
+  { id: -7, url: "https://images.unsplash.com/photo-1571772996211-2f02c9727629?w=800&q=80", caption: "Teeth whitening results", created_at: "" },
+  { id: -8, url: "https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?w=800&q=80", caption: "Clinic reception desk", created_at: "" },
+];
 
 export default function Gallery() {
   const [images, setImages] = useState<GalleryImage[]>([]);
@@ -63,15 +74,9 @@ export default function Gallery() {
                 <div key={i} className="aspect-square rounded-2xl bg-muted animate-pulse" />
               ))}
             </div>
-          ) : images.length === 0 ? (
-            <div className="text-center py-24">
-              <ImageIcon className="w-16 h-16 mx-auto mb-4 text-muted-foreground/40" />
-              <p className="text-muted-foreground text-lg font-medium">No images yet</p>
-              <p className="text-muted-foreground text-sm mt-1">The admin can upload gallery images from the dashboard.</p>
-            </div>
           ) : (
             <div className="columns-2 md:columns-3 lg:columns-4 gap-4 space-y-4">
-              {images.map((img) => (
+              {(images.length > 0 ? images : DEMO_IMAGES).map((img) => (
                 <div
                   key={img.id}
                   className="break-inside-avoid cursor-pointer group overflow-hidden rounded-2xl border border-border"
