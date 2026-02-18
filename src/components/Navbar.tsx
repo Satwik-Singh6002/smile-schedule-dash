@@ -4,7 +4,9 @@ import { Menu, X, Stethoscope } from "lucide-react";
 
 const navItems = [
   { label: "Home", to: "/" },
-  { label: "Services", to: "/#services" },
+  { label: "Services", to: "/services" },
+  { label: "About", to: "/about" },
+  { label: "Gallery", to: "/gallery" },
   { label: "Book Appointment", to: "/book" },
   { label: "Blog", to: "/blog" },
 ];
