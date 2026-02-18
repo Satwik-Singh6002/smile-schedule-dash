@@ -108,8 +108,10 @@ create policy "Anyone can view published posts" on public.blog_posts for select
 create policy "Admins can manage blog posts" on public.blog_posts for all
   using (public.has_role(auth.uid(), 'admin'));
 
--- User roles: admin only
-create policy "Admins can view roles" on public.user_roles for select
+-- User roles: users can read their own role, admins can read all
+create policy "Users can view own role" on public.user_roles for select
+  using (auth.uid() = user_id);
+create policy "Admins can manage roles" on public.user_roles for all
   using (public.has_role(auth.uid(), 'admin'));
 
 -- =============================================
