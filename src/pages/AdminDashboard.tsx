@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   LayoutDashboard, Calendar, Users, FileText,
   LogOut, ChevronRight, Plus, Trash2, Edit, Check, X,
-  Clock, CheckCircle, TrendingUp, Stethoscope, Menu, Loader2, AlertCircle
+  Clock, CheckCircle, TrendingUp, Stethoscope, Menu, Loader2, AlertCircle,
+  ImagePlus, ChevronLeft, ChevronRight as ChevronRightIcon
 } from "lucide-react";
 import AdminLogin from "./AdminLogin";
 import { supabase } from "@/integrations/supabase/client";
@@ -16,6 +17,7 @@ type Appointment = {
 type BlogPost = {
   id: number; title: string; category: string; author: string;
   content: string | null; published: boolean; created_at: string;
+  images: string[] | null;
 };
 type Dentist = { id: number; name: string; specialty: string; avatar: string; };
 type BlockedSlots = Record<string, Record<string, string[]>>;
@@ -354,6 +356,10 @@ function BlogManager({ dentists }: { dentists: Dentist[] }) {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newPost, setNewPost] = useState({ title: "", category: "Oral Health", content: "" });
+  const [pendingImages, setPendingImages] = useState<File[]>([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [previewSlide, setPreviewSlide] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const categories = ["Oral Health", "Patient Guide", "Cosmetic Dentistry", "Dental Implants", "Pediatric", "General"];
   const defaultAuthor = dentists[0]?.name || "Dr. Admin";
 
@@ -362,29 +368,80 @@ function BlogManager({ dentists }: { dentists: Dentist[] }) {
   const fetchPosts = async () => {
     setLoading(true);
     const { data } = await supabase.from("blog_posts").select("*").order("created_at", { ascending: false });
-    if (data) setPosts(data);
+    if (data) setPosts(data as BlogPost[]);
     setLoading(false);
+  };
+
+  const uploadImages = async (postId: number, files: File[]): Promise<string[]> => {
+    const urls: string[] = [];
+    for (const file of files) {
+      const ext = file.name.split(".").pop();
+      const path = `blog/${postId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error } = await supabase.storage.from("blog-images").upload(path, file, { upsert: true });
+      if (!error) {
+        const { data: urlData } = supabase.storage.from("blog-images").getPublicUrl(path);
+        urls.push(urlData.publicUrl);
+      }
+    }
+    return urls;
   };
 
   const handleCreate = async () => {
     if (!newPost.title.trim()) return;
     setSaving(true);
+    // Insert post first to get id
     const { data } = await supabase.from("blog_posts").insert({
       title: newPost.title,
       category: newPost.category,
       author: defaultAuthor,
       content: newPost.content,
       published: false,
+      images: [],
     }).select().single();
-    if (data) setPosts(prev => [data, ...prev]);
+
+    if (data) {
+      let finalPost = data as BlogPost;
+      if (pendingImages.length > 0) {
+        setUploadingImages(true);
+        const urls = await uploadImages(data.id, pendingImages);
+        if (urls.length > 0) {
+          const { data: updated } = await supabase
+            .from("blog_posts")
+            .update({ images: urls })
+            .eq("id", data.id)
+            .select()
+            .single();
+          if (updated) finalPost = updated as BlogPost;
+        }
+        setUploadingImages(false);
+      }
+      setPosts(prev => [finalPost, ...prev]);
+    }
     setCreating(false);
     setNewPost({ title: "", category: "Oral Health", content: "" });
+    setPendingImages([]);
+    setPreviewSlide(0);
     setSaving(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    setPendingImages(prev => {
+      const combined = [...prev, ...files];
+      return combined.slice(0, 10); // max 10 images
+    });
+    setPreviewSlide(0);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removePreviewImage = (idx: number) => {
+    setPendingImages(prev => prev.filter((_, i) => i !== idx));
+    setPreviewSlide(s => Math.max(0, s - (idx <= s ? 1 : 0)));
   };
 
   const togglePublish = async (id: number, current: boolean) => {
     const { data } = await supabase.from("blog_posts").update({ published: !current }).eq("id", id).select().single();
-    if (data) setPosts(prev => prev.map(p => p.id === id ? data : p));
+    if (data) setPosts(prev => prev.map(p => p.id === id ? data as BlogPost : p));
   };
 
   const deletePost = async (id: number) => {
@@ -427,12 +484,92 @@ function BlogManager({ dentists }: { dentists: Dentist[] }) {
               <textarea className="input-dental min-h-[140px] resize-y" placeholder="Write your article content here..."
                 value={newPost.content} onChange={e => setNewPost({ ...newPost, content: e.target.value })} />
             </div>
-            <div className="flex gap-3">
-              <button onClick={handleCreate} className="btn-primary text-sm" disabled={!newPost.title.trim() || saving}>
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                {saving ? "Saving..." : "Save as Draft"}
+
+            {/* Image upload */}
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Images <span className="text-muted-foreground font-normal">(optional, up to 10)</span>
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed text-sm font-medium transition-all duration-200 hover:border-primary/60"
+                style={{ borderColor: "hsl(var(--primary) / 0.4)", color: "hsl(var(--primary))" }}
+              >
+                <ImagePlus className="w-4 h-4" /> Add Images
               </button>
-              <button onClick={() => setCreating(false)} className="btn-outline text-sm">
+
+              {/* Image preview slider */}
+              {pendingImages.length > 0 && (
+                <div className="mt-3 relative rounded-xl overflow-hidden" style={{ height: 180 }}>
+                  <img
+                    src={URL.createObjectURL(pendingImages[previewSlide])}
+                    alt="preview"
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Remove button */}
+                  <button
+                    onClick={() => removePreviewImage(previewSlide)}
+                    className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center bg-red-500 text-white text-xs"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  {/* Prev/Next */}
+                  {pendingImages.length > 1 && (
+                    <>
+                      <button
+                        onClick={() => setPreviewSlide(s => (s - 1 + pendingImages.length) % pendingImages.length)}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center"
+                        style={{ background: "hsl(var(--card) / 0.85)" }}
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setPreviewSlide(s => (s + 1) % pendingImages.length)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center"
+                        style={{ background: "hsl(var(--card) / 0.85)" }}
+                      >
+                        <ChevronRightIcon className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
+                  {/* Dots */}
+                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+                    {pendingImages.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setPreviewSlide(i)}
+                        className="rounded-full transition-all duration-200"
+                        style={{
+                          width: i === previewSlide ? 16 : 6,
+                          height: 6,
+                          background: i === previewSlide ? "hsl(var(--primary))" : "hsl(var(--card) / 0.7)",
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <span className="absolute top-2 left-2 text-xs px-2 py-0.5 rounded-full"
+                    style={{ background: "hsl(var(--card) / 0.85)" }}>
+                    {previewSlide + 1}/{pendingImages.length}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={handleCreate} className="btn-primary text-sm" disabled={!newPost.title.trim() || saving || uploadingImages}>
+                {(saving || uploadingImages) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {uploadingImages ? "Uploading images..." : saving ? "Saving..." : "Save as Draft"}
+              </button>
+              <button onClick={() => { setCreating(false); setPendingImages([]); setPreviewSlide(0); }} className="btn-outline text-sm">
                 <X className="w-4 h-4" /> Cancel
               </button>
             </div>
@@ -453,17 +590,30 @@ function BlogManager({ dentists }: { dentists: Dentist[] }) {
         <div className="space-y-3">
           {posts.map(post => (
             <div key={post.id} className="card-dental p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="section-tag text-xs">{post.category}</span>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${post.published ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-                    {post.published ? "Published" : "Draft"}
-                  </span>
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                {post.images && post.images.length > 0 ? (
+                  <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0">
+                    <img src={post.images[0]} alt={post.title} className="w-full h-full object-cover" />
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                    style={{ background: "hsl(var(--secondary))" }}>📄</div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="section-tag text-xs">{post.category}</span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${post.published ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
+                      {post.published ? "Published" : "Draft"}
+                    </span>
+                    {post.images && post.images.length > 0 && (
+                      <span className="text-xs text-muted-foreground">📷 {post.images.length}</span>
+                    )}
+                  </div>
+                  <h4 className="font-semibold text-sm truncate">{post.title}</h4>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    By {post.author} · {new Date(post.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </p>
                 </div>
-                <h4 className="font-semibold text-sm truncate">{post.title}</h4>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  By {post.author} · {new Date(post.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                </p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button onClick={() => togglePublish(post.id, post.published)}

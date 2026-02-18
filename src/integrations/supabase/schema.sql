@@ -44,8 +44,12 @@ create table if not exists public.blog_posts (
   author text not null,
   content text,
   published boolean default false,
+  images text[] default '{}',
   created_at timestamptz default now()
 );
+
+-- 4b. Add images column if upgrading existing table
+alter table public.blog_posts add column if not exists images text[] default '{}';
 
 -- 5. User roles table (admin roles)
 create table if not exists public.user_roles (
@@ -128,3 +132,25 @@ insert into public.blog_posts (title, category, author, published) values
   ('What to Expect During Your First Dental Visit', 'Patient Guide', 'Dr. James Morrison', true),
   ('Teeth Whitening: Professional vs At-Home Treatments', 'Cosmetic Dentistry', 'Dr. Aisha Patel', false)
 on conflict do nothing;
+
+-- =============================================
+-- Storage: Blog Images Bucket
+-- Run this to create the blog-images bucket
+-- =============================================
+insert into storage.buckets (id, name, public)
+values ('blog-images', 'blog-images', true)
+on conflict (id) do nothing;
+
+-- Allow public to read blog images
+create policy if not exists "Public can view blog images"
+  on storage.objects for select
+  using (bucket_id = 'blog-images');
+
+-- Allow admins to upload/delete blog images
+create policy if not exists "Admins can upload blog images"
+  on storage.objects for insert
+  with check (bucket_id = 'blog-images' and public.has_role(auth.uid(), 'admin'));
+
+create policy if not exists "Admins can delete blog images"
+  on storage.objects for delete
+  using (bucket_id = 'blog-images' and public.has_role(auth.uid(), 'admin'));
