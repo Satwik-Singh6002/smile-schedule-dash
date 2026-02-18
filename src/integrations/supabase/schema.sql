@@ -154,3 +154,38 @@ create policy if not exists "Admins can upload blog images"
 create policy if not exists "Admins can delete blog images"
   on storage.objects for delete
   using (bucket_id = 'blog-images' and public.has_role(auth.uid(), 'admin'));
+
+-- =============================================
+-- Gallery Images Table
+-- =============================================
+create table if not exists public.gallery_images (
+  id serial primary key,
+  url text not null,
+  caption text,
+  created_at timestamptz default now()
+);
+
+alter table public.gallery_images enable row level security;
+
+create policy "Anyone can view gallery images" on public.gallery_images for select using (true);
+create policy "Admins can manage gallery images" on public.gallery_images for all
+  using (public.has_role(auth.uid(), 'admin'));
+
+-- =============================================
+-- Storage: Gallery Images Bucket
+-- =============================================
+insert into storage.buckets (id, name, public)
+values ('gallery-images', 'gallery-images', true)
+on conflict (id) do nothing;
+
+create policy if not exists "Public can view gallery images"
+  on storage.objects for select
+  using (bucket_id = 'gallery-images');
+
+create policy if not exists "Admins can upload gallery images"
+  on storage.objects for insert
+  with check (bucket_id = 'gallery-images' and public.has_role(auth.uid(), 'admin'));
+
+create policy if not exists "Admins can delete gallery images"
+  on storage.objects for delete
+  using (bucket_id = 'gallery-images' and public.has_role(auth.uid(), 'admin'));

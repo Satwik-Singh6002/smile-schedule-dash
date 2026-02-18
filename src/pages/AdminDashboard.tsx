@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Calendar, Users, FileText,
   LogOut, ChevronRight, Plus, Trash2, Edit, Check, X,
   Clock, CheckCircle, TrendingUp, Stethoscope, Menu, Loader2, AlertCircle,
-  ImagePlus, ChevronLeft, ChevronRight as ChevronRightIcon
+  ImagePlus, ChevronLeft, ChevronRight as ChevronRightIcon, Image, Images
 } from "lucide-react";
 import AdminLogin from "./AdminLogin";
 import { supabase } from "@/integrations/supabase/client";
@@ -683,12 +683,159 @@ function BlogManager({ dentists }: { dentists: Dentist[] }) {
   );
 }
 
+// --- Gallery Manager ---
+function GalleryManager() {
+  const [images, setImages] = useState<{ id: number; url: string; caption: string | null; created_at: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [caption, setCaption] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchImages();
+    const channel = supabase
+      .channel("gallery_admin_realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "gallery_images" }, fetchImages)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  const fetchImages = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("gallery_images").select("*").order("created_at", { ascending: false });
+    setImages(data || []);
+    setLoading(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSelectedFile(file);
+    setPreview(URL.createObjectURL(file));
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) return;
+    setUploading(true);
+    const ext = selectedFile.name.split(".").pop();
+    const path = `gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error } = await supabase.storage.from("gallery-images").upload(path, selectedFile, { upsert: true });
+    if (!error) {
+      const { data: urlData } = supabase.storage.from("gallery-images").getPublicUrl(path);
+      await supabase.from("gallery_images").insert({ url: urlData.publicUrl, caption: caption.trim() || null });
+      setSelectedFile(null);
+      setPreview(null);
+      setCaption("");
+      if (fileRef.current) fileRef.current.value = "";
+      fetchImages();
+    }
+    setUploading(false);
+  };
+
+  const handleDelete = async (id: number, url: string) => {
+    const path = url.split("/gallery-images/")[1]?.split("?")[0];
+    if (path) await supabase.storage.from("gallery-images").remove([path]);
+    await supabase.from("gallery_images").delete().eq("id", id);
+    setImages(prev => prev.filter(img => img.id !== id));
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold" style={{ fontFamily: "'DM Serif Display', serif" }}>Gallery Manager</h2>
+        <p className="text-sm text-muted-foreground mt-1">Upload and manage clinic photos shown on the public gallery page.</p>
+      </div>
+
+      {/* Upload card */}
+      <div className="card-dental p-6 border-2" style={{ borderColor: "hsl(var(--primary) / 0.25)" }}>
+        <h3 className="font-bold mb-4 flex items-center gap-2 text-sm">
+          <ImagePlus className="w-4 h-4" style={{ color: "hsl(var(--primary))" }} /> Upload New Image
+        </h3>
+        <div className="space-y-4">
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-xl border-2 border-dashed text-sm transition-all duration-200"
+            style={{ borderColor: "hsl(var(--primary) / 0.35)", color: "hsl(var(--primary))", background: "hsl(var(--primary) / 0.03)" }}>
+            <Images className="w-8 h-8 opacity-60" />
+            <span className="font-medium">{selectedFile ? selectedFile.name : "Click to select image"}</span>
+            <span className="text-xs text-muted-foreground">PNG, JPG, WEBP up to 10MB</span>
+          </button>
+
+          {preview && (
+            <div className="relative rounded-xl overflow-hidden" style={{ height: 200 }}>
+              <img src={preview} alt="preview" className="w-full h-full object-cover" />
+              <button onClick={() => { setSelectedFile(null); setPreview(null); if (fileRef.current) fileRef.current.value = ""; }}
+                className="absolute top-2 right-2 w-7 h-7 rounded-full bg-red-500 text-white flex items-center justify-center">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          <input
+            className="input-dental"
+            placeholder="Caption (optional)"
+            value={caption}
+            onChange={e => setCaption(e.target.value)}
+          />
+
+          <button
+            onClick={handleUpload}
+            disabled={!selectedFile || uploading}
+            className="btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            {uploading ? "Uploading..." : "Upload to Gallery"}
+          </button>
+        </div>
+      </div>
+
+      {/* Images grid */}
+      {loading ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="aspect-square rounded-2xl bg-muted animate-pulse" />
+          ))}
+        </div>
+      ) : images.length === 0 ? (
+        <div className="card-dental p-10 text-center text-muted-foreground">
+          <Image className="w-8 h-8 mx-auto mb-2 opacity-40" />
+          <p className="text-sm">No images yet. Upload your first clinic photo above.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {images.map(img => (
+            <div key={img.id} className="group relative rounded-2xl overflow-hidden border border-border"
+              style={{ boxShadow: "var(--shadow-card)" }}>
+              <img src={img.url} alt={img.caption || "Gallery"} className="w-full aspect-square object-cover transition-transform duration-300 group-hover:scale-105" />
+              <div className="absolute inset-0 bg-foreground/0 group-hover:bg-foreground/50 transition-all duration-300 flex flex-col items-center justify-center gap-2">
+                {img.caption && (
+                  <p className="text-white text-xs font-medium px-3 text-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    {img.caption}
+                  </p>
+                )}
+                <button
+                  onClick={() => handleDelete(img.id, img.url)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 p-2 rounded-full bg-red-500 text-white">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Nav Items ---
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: "appointments", label: "Appointments", icon: <Users className="w-4 h-4" /> },
   { id: "calendar", label: "Calendar & Slots", icon: <Calendar className="w-4 h-4" /> },
   { id: "blog", label: "Blog", icon: <FileText className="w-4 h-4" /> },
+  { id: "gallery", label: "Gallery", icon: <Images className="w-4 h-4" /> },
 ];
 
 // --- Main Admin Dashboard ---
@@ -819,6 +966,7 @@ export default function AdminDashboard() {
           )}
           {activeTab === "calendar" && <CalendarManager dentists={loadingDentists ? [] : dentists} />}
           {activeTab === "blog" && <BlogManager dentists={loadingDentists ? [] : dentists} />}
+          {activeTab === "gallery" && <GalleryManager />}
         </main>
       </div>
     </div>
