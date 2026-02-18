@@ -1,26 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Calendar, Clock, User, ChevronLeft, ChevronRight, CheckCircle } from "lucide-react";
+import { ArrowRight, Calendar, Clock, User, ChevronLeft, ChevronRight, CheckCircle, Loader2, AlertCircle } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-
-const dentists = [
-  { id: 1, name: "Dr. Aisha Patel", specialty: "General Dentistry & Cosmetics", avatar: "AP", rating: 4.9, reviews: 312 },
-  { id: 2, name: "Dr. James Morrison", specialty: "Orthodontics", avatar: "JM", rating: 4.8, reviews: 241 },
-  { id: 3, name: "Dr. Lisa Chen", specialty: "Pediatric Dentistry", avatar: "LC", rating: 5.0, reviews: 189 },
-];
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
 
 const timeSlots = [
   "09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM",
   "11:00 AM", "11:30 AM", "02:00 PM", "02:30 PM",
   "03:00 PM", "03:30 PM", "04:00 PM", "04:30 PM",
 ];
-
-const bookedSlots: Record<string, string[]> = {
-  "1": ["09:30 AM", "11:00 AM", "03:00 PM"],
-  "2": ["10:00 AM", "02:30 PM"],
-  "3": ["09:00 AM", "11:30 AM", "04:00 PM"],
-};
 
 const services = [
   "General Checkup", "Teeth Cleaning", "Teeth Whitening", "Fillings",
@@ -29,6 +19,8 @@ const services = [
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+type Dentist = { id: number; name: string; specialty: string; avatar: string; rating?: number; reviews?: number; };
 
 function CalendarPicker({ selected, onChange }: { selected: Date | null; onChange: (d: Date) => void }) {
   const [view, setView] = useState(() => {
@@ -102,26 +94,91 @@ function CalendarPicker({ selected, onChange }: { selected: Date | null; onChang
 
 export default function BookAppointment() {
   const [step, setStep] = useState(1);
+  const [dentists, setDentists] = useState<Dentist[]>([]);
+  const [loadingDentists, setLoadingDentists] = useState(true);
   const [selectedDentist, setSelectedDentist] = useState<number | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [selectedService, setSelectedService] = useState<string>("");
   const [form, setForm] = useState({ name: "", email: "", phone: "", notes: "" });
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [bookedSlots, setBookedSlots] = useState<string[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
 
-  const booked = selectedDentist ? bookedSlots[String(selectedDentist)] || [] : [];
+  // Fetch dentists on mount
+  useEffect(() => {
+    const fetchDentists = async () => {
+      const { data, error } = await supabase.from("dentists").select("*").order("id");
+      if (error) {
+        console.error("Error fetching dentists:", error);
+      } else {
+        setDentists(data || []);
+      }
+      setLoadingDentists(false);
+    };
+    fetchDentists();
+  }, []);
+
+  // Fetch blocked slots when dentist or date changes
+  useEffect(() => {
+    if (!selectedDentist || !selectedDate) {
+      setBookedSlots([]);
+      return;
+    }
+    const dayName = DAYS[selectedDate.getDay()]; // e.g. "Mon"
+    const fetchBlockedSlots = async () => {
+      setLoadingSlots(true);
+      const { data, error } = await supabase
+        .from("blocked_slots")
+        .select("slot")
+        .eq("dentist_id", selectedDentist)
+        .eq("day", dayName);
+      if (error) {
+        console.error("Error fetching blocked slots:", error);
+      } else {
+        setBookedSlots((data || []).map((r: { slot: string }) => r.slot));
+      }
+      setLoadingSlots(false);
+    };
+    fetchBlockedSlots();
+  }, [selectedDentist, selectedDate]);
 
   const canNext = () => {
     if (step === 1) return selectedDentist !== null;
     if (step === 2) return selectedDate !== null && selectedSlot !== null;
     if (step === 3) return selectedService !== "";
-    if (step === 4) return form.name && form.email && form.phone;
+    if (step === 4) return form.name !== "" && form.email !== "" && form.phone !== "";
     return false;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitted(true);
+    if (!canNext()) return;
+
+    const dentist = dentists.find(d => d.id === selectedDentist);
+    setSubmitting(true);
+    setSubmitError(null);
+
+    const { error } = await supabase.from("appointments").insert({
+      patient: form.name,
+      patient_email: form.email,
+      patient_phone: form.phone,
+      dentist: dentist?.name ?? "",
+      date: selectedDate?.toDateString() ?? "",
+      time: selectedSlot ?? "",
+      service: selectedService,
+      status: "pending",
+    });
+
+    if (error) {
+      console.error("Error booking appointment:", error);
+      setSubmitError("Failed to book appointment. Please try again.");
+    } else {
+      setSubmitted(true);
+    }
+    setSubmitting(false);
   };
 
   const dentist = dentists.find(d => d.id === selectedDentist);
@@ -202,25 +259,26 @@ export default function BookAppointment() {
               <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
                 <User className="w-5 h-5" style={{ color: "hsl(var(--primary))" }} /> Choose Your Dentist
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {dentists.map(d => (
-                  <button key={d.id} onClick={() => setSelectedDentist(d.id)}
-                    className={`card-dental text-left transition-all duration-200`}
-                    style={{ outline: selectedDentist === d.id ? `2px solid hsl(var(--primary))` : undefined }}>
-                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white text-xl font-bold mb-4"
-                      style={{ background: "var(--gradient-primary)" }}>
-                      {d.avatar}
-                    </div>
-                    <h4 className="font-bold text-base">{d.name}</h4>
-                    <p className="text-xs text-muted-foreground mt-1 mb-3">{d.specialty}</p>
-                    <div className="flex items-center gap-1 text-xs">
-                      <span className="text-yellow-500">★</span>
-                      <span className="font-semibold">{d.rating}</span>
-                      <span className="text-muted-foreground">({d.reviews} reviews)</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
+              {loadingDentists ? (
+                <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" /> Loading dentists...
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {dentists.map(d => (
+                    <button key={d.id} onClick={() => setSelectedDentist(d.id)}
+                      className={`card-dental text-left transition-all duration-200`}
+                      style={{ outline: selectedDentist === d.id ? `2px solid hsl(var(--primary))` : undefined }}>
+                      <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white text-xl font-bold mb-4"
+                        style={{ background: "var(--gradient-primary)" }}>
+                        {d.avatar}
+                      </div>
+                      <h4 className="font-bold text-base">{d.name}</h4>
+                      <p className="text-xs text-muted-foreground mt-1 mb-3">{d.specialty}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -240,23 +298,29 @@ export default function BookAppointment() {
                     {selectedDate ? `Available Slots — ${selectedDate.toDateString()}` : "Select a date first"}
                   </p>
                   {selectedDate && (
-                    <div className="grid grid-cols-3 gap-2">
-                      {timeSlots.map(slot => {
-                        const isBooked = booked.includes(slot);
-                        const isSelected = selectedSlot === slot;
-                        return (
-                          <button
-                            key={slot}
-                            disabled={isBooked}
-                            onClick={() => setSelectedSlot(slot)}
-                            className={`slot-btn ${isSelected ? "selected" : ""} ${isBooked ? "booked" : ""}`}>
-                            {slot}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    loadingSlots ? (
+                      <div className="flex items-center gap-2 text-muted-foreground py-4">
+                        <Loader2 className="w-4 h-4 animate-spin" /> Loading slots...
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-2">
+                        {timeSlots.map(slot => {
+                          const isBooked = bookedSlots.includes(slot);
+                          const isSelected = selectedSlot === slot;
+                          return (
+                            <button
+                              key={slot}
+                              disabled={isBooked}
+                              onClick={() => setSelectedSlot(slot)}
+                              className={`slot-btn ${isSelected ? "selected" : ""} ${isBooked ? "booked" : ""}`}>
+                              {slot}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
                   )}
-                  {selectedDate && (
+                  {selectedDate && !loadingSlots && (
                     <p className="text-xs text-muted-foreground mt-3">
                       <span className="inline-block w-3 h-3 rounded-sm bg-muted mr-1" /> = Already booked
                     </p>
@@ -326,11 +390,20 @@ export default function BookAppointment() {
                     onChange={e => setForm({ ...form, notes: e.target.value })} />
                 </div>
               </div>
-              {step === 4 && (
-                <button type="submit" className="btn-primary w-full mt-6" disabled={!canNext()}>
-                  Confirm Appointment <CheckCircle className="w-4 h-4" />
-                </button>
+
+              {submitError && (
+                <div className="flex items-center gap-2 mt-4 p-3 rounded-xl text-sm" style={{ background: "hsl(0 85% 97%)", color: "hsl(0 72% 51%)" }}>
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> {submitError}
+                </div>
               )}
+
+              <button type="submit" className="btn-primary w-full mt-6" disabled={!canNext() || submitting}>
+                {submitting ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Booking...</>
+                ) : (
+                  <>Confirm Appointment <CheckCircle className="w-4 h-4" /></>
+                )}
+              </button>
             </form>
           )}
         </div>
