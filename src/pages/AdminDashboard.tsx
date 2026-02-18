@@ -206,6 +206,7 @@ function AppointmentsManager({ appointments, loading, onUpdateStatus }: {
 // --- Calendar & Slots Manager ---
 function CalendarManager({ dentists }: { dentists: Dentist[] }) {
   const [selectedDentist, setSelectedDentist] = useState<number | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string>("Mon");
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlots>({});
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -216,6 +217,16 @@ function CalendarManager({ dentists }: { dentists: Dentist[] }) {
 
   useEffect(() => {
     fetchBlockedSlots();
+
+    // Real-time subscription
+    const channel = supabase
+      .channel("blocked_slots_realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "blocked_slots" }, () => {
+        fetchBlockedSlots();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const fetchBlockedSlots = async () => {
@@ -234,48 +245,53 @@ function CalendarManager({ dentists }: { dentists: Dentist[] }) {
     setLoading(false);
   };
 
-  const toggleSlot = async (day: string, slot: string) => {
+  const toggleSlot = async (slot: string) => {
     if (!selectedDentist) return;
     const key = String(selectedDentist);
-    const isBlocked = blockedSlots[key]?.[day]?.includes(slot);
-    const toggleKey = `${day}-${slot}`;
-    setToggling(toggleKey);
+    const isBlocked = blockedSlots[key]?.[selectedDay]?.includes(slot);
+    setToggling(slot);
 
     if (isBlocked) {
       await supabase.from("blocked_slots").delete()
-        .eq("dentist_id", selectedDentist).eq("day", day).eq("slot", slot);
+        .eq("dentist_id", selectedDentist).eq("day", selectedDay).eq("slot", slot);
       setBlockedSlots(prev => ({
         ...prev,
-        [key]: { ...prev[key], [day]: (prev[key]?.[day] || []).filter(s => s !== slot) }
+        [key]: { ...prev[key], [selectedDay]: (prev[key]?.[selectedDay] || []).filter(s => s !== slot) }
       }));
     } else {
-      await supabase.from("blocked_slots").insert({ dentist_id: selectedDentist, day, slot });
+      await supabase.from("blocked_slots").insert({ dentist_id: selectedDentist, day: selectedDay, slot });
       setBlockedSlots(prev => ({
         ...prev,
-        [key]: { ...prev[key], [day]: [...(prev[key]?.[day] || []), slot] }
+        [key]: { ...prev[key], [selectedDay]: [...(prev[key]?.[selectedDay] || []), slot] }
       }));
     }
     setToggling(null);
   };
 
   const dentist = dentists.find(d => d.id === selectedDentist);
+  const currentBlocked = blockedSlots[String(selectedDentist)]?.[selectedDay] || [];
+  const blockedCount = currentBlocked.length;
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold" style={{ fontFamily: "'DM Serif Display', serif" }}>Calendar & Slots</h2>
-        <p className="text-sm text-muted-foreground mt-1">Manage availability for each dentist</p>
+        <p className="text-sm text-muted-foreground mt-1">Block or unblock time slots for each dentist. Updates in real-time.</p>
       </div>
 
+      {/* Dentist selector */}
       <div className="flex gap-3 flex-wrap">
         {dentists.map(d => (
           <button key={d.id} onClick={() => setSelectedDentist(d.id)}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition-all duration-200 ${selectedDentist === d.id ? "text-white border-transparent" : "border-border hover:border-primary/50"}`}
             style={{ background: selectedDentist === d.id ? "hsl(var(--primary))" : undefined }}>
-            <div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold"
-              style={{ background: selectedDentist === d.id ? "hsl(0 0% 100% / 0.2)" : "hsl(var(--secondary))", color: selectedDentist === d.id ? "white" : "hsl(var(--primary))" }}>
+            <span className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
+              style={{
+                background: selectedDentist === d.id ? "hsl(0 0% 100% / 0.2)" : "hsl(var(--secondary))",
+                color: selectedDentist === d.id ? "white" : "hsl(var(--primary))"
+              }}>
               {d.avatar}
-            </div>
+            </span>
             {d.name}
           </button>
         ))}
@@ -286,63 +302,93 @@ function CalendarManager({ dentists }: { dentists: Dentist[] }) {
           <Loader2 className="w-5 h-5 animate-spin" /> Loading slots...
         </div>
       ) : dentist ? (
-        <div className="card-dental p-6">
-          <div className="flex items-center gap-3 mb-6 pb-4 border-b border-border">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm"
-              style={{ background: "var(--gradient-primary)" }}>
-              {dentist.avatar}
+        <div className="card-dental p-6 space-y-5">
+          {/* Dentist info + legend */}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                style={{ background: "var(--gradient-primary)" }}>
+                {dentist.avatar}
+              </div>
+              <div>
+                <p className="font-semibold">{dentist.name}</p>
+                <p className="text-xs text-muted-foreground">{dentist.specialty}</p>
+              </div>
             </div>
-            <div>
-              <p className="font-semibold">{dentist.name}</p>
-              <p className="text-xs text-muted-foreground">{dentist.specialty}</p>
-            </div>
-            <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-sm inline-block" style={{ background: "hsl(var(--primary))" }} /> Available
+                <span className="w-3 h-3 rounded-sm inline-block" style={{ background: "hsl(var(--primary) / 0.15)", border: "1px solid hsl(var(--primary) / 0.4)" }} />
+                Available
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-sm inline-block bg-red-200" /> Blocked
+                <span className="w-3 h-3 rounded-sm inline-block bg-red-100" style={{ border: "1px solid hsl(0 84% 80%)" }} />
+                Blocked
               </span>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className="text-left text-xs font-medium text-muted-foreground pb-3 pr-4 w-24">Time</th>
-                  {DAYS.map(day => (
-                    <th key={day} className="text-center text-xs font-medium text-muted-foreground pb-3 px-2">{day}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {ALL_SLOTS.map(slot => (
-                  <tr key={slot} className="border-t border-border/50">
-                    <td className="py-2 pr-4 text-xs font-medium text-muted-foreground">{slot}</td>
-                    {DAYS.map(day => {
-                      const isBlocked = blockedSlots[String(selectedDentist)]?.[day]?.includes(slot);
-                      const isToggling = toggling === `${day}-${slot}`;
-                      return (
-                        <td key={day} className="py-2 px-2 text-center">
-                          <button onClick={() => toggleSlot(day, slot)} disabled={isToggling}
-                            className={`w-full rounded-lg py-1.5 text-xs font-medium transition-all duration-150 border disabled:opacity-60 ${
-                              isBlocked
-                                ? "bg-red-50 border-red-200 text-red-600 hover:bg-red-100"
-                                : "border-border hover:border-primary/50 hover:bg-accent"
-                            }`}
-                            style={!isBlocked ? { color: "hsl(var(--primary))" } : undefined}>
-                            {isToggling ? "..." : isBlocked ? "✕" : "✓"}
-                          </button>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/* Day tabs */}
+          <div className="flex gap-2 flex-wrap">
+            {DAYS.map(day => {
+              const cnt = (blockedSlots[String(selectedDentist)]?.[day] || []).length;
+              return (
+                <button key={day} onClick={() => setSelectedDay(day)}
+                  className={`relative px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border ${
+                    selectedDay === day ? "text-white border-transparent" : "border-border hover:border-primary/40"
+                  }`}
+                  style={{ background: selectedDay === day ? "hsl(var(--primary))" : undefined }}>
+                  {day}
+                  {cnt > 0 && (
+                    <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold ${
+                      selectedDay === day ? "bg-white/20 text-white" : "bg-red-100 text-red-600"
+                    }`}>
+                      {cnt}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
-          <p className="text-xs text-muted-foreground mt-4">Click any slot to toggle its availability. Red = blocked for patients.</p>
+
+          {/* Slot grid */}
+          <div>
+            <p className="text-xs text-muted-foreground mb-3">
+              {blockedCount === 0
+                ? `All ${ALL_SLOTS.length} slots available on ${selectedDay}`
+                : `${blockedCount} slot${blockedCount > 1 ? "s" : ""} blocked on ${selectedDay} — click to toggle`}
+            </p>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+              {ALL_SLOTS.map(slot => {
+                const isBlocked = currentBlocked.includes(slot);
+                const isToggling = toggling === slot;
+                return (
+                  <button
+                    key={slot}
+                    onClick={() => toggleSlot(slot)}
+                    disabled={isToggling}
+                    className={`py-3 px-3 rounded-xl text-sm font-medium border transition-all duration-150 disabled:opacity-60 flex items-center justify-center gap-1.5 ${
+                      isBlocked
+                        ? "bg-red-50 border-red-200 text-red-600 hover:bg-red-100"
+                        : "hover:border-primary/60"
+                    }`}
+                    style={
+                      !isBlocked
+                        ? { background: "hsl(var(--primary) / 0.06)", borderColor: "hsl(var(--primary) / 0.25)", color: "hsl(var(--primary))" }
+                        : undefined
+                    }>
+                    {isToggling ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : isBlocked ? (
+                      <X className="w-3.5 h-3.5" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
+                    {slot}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
