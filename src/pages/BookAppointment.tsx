@@ -121,29 +121,45 @@ export default function BookAppointment() {
     fetchDentists();
   }, []);
 
-  // Fetch blocked slots when dentist or date changes
+  // Fetch blocked slots + already-booked appointments when dentist or date changes
   useEffect(() => {
     if (!selectedDentist || !selectedDate) {
       setBookedSlots([]);
       return;
     }
     const dayName = DAYS[selectedDate.getDay()]; // e.g. "Mon"
-    const fetchBlockedSlots = async () => {
+    const dentistObj = dentists.find(d => d.id === selectedDentist);
+    const dateString = selectedDate.toDateString(); // e.g. "Mon Feb 19 2026"
+
+    const fetchUnavailableSlots = async () => {
       setLoadingSlots(true);
-      const { data, error } = await supabase
-        .from("blocked_slots")
-        .select("slot")
-        .eq("dentist_id", selectedDentist)
-        .eq("day", dayName);
-      if (error) {
-        console.error("Error fetching blocked slots:", error);
-      } else {
-        setBookedSlots((data || []).map((r: { slot: string }) => r.slot));
-      }
+
+      // Fetch admin-blocked slots (by day of week)
+      const [blockedRes, appointmentsRes] = await Promise.all([
+        supabase
+          .from("blocked_slots")
+          .select("slot")
+          .eq("dentist_id", selectedDentist)
+          .eq("day", dayName),
+        // Fetch already-booked appointments for this dentist on this exact date
+        supabase
+          .from("appointments")
+          .select("time")
+          .eq("dentist", dentistObj?.name ?? "")
+          .eq("date", dateString)
+          .in("status", ["pending", "confirmed"]),
+      ]);
+
+      const blocked = (blockedRes.data || []).map((r: { slot: string }) => r.slot);
+      const booked = (appointmentsRes.data || []).map((r: { time: string }) => r.time);
+
+      // Combine both sets — union of blocked + already booked
+      setBookedSlots(Array.from(new Set([...blocked, ...booked])));
       setLoadingSlots(false);
     };
-    fetchBlockedSlots();
-  }, [selectedDentist, selectedDate]);
+
+    fetchUnavailableSlots();
+  }, [selectedDentist, selectedDate, dentists]);
 
   const canNext = () => {
     if (step === 1) return selectedDentist !== null;
@@ -322,7 +338,7 @@ export default function BookAppointment() {
                   )}
                   {selectedDate && !loadingSlots && (
                     <p className="text-xs text-muted-foreground mt-3">
-                      <span className="inline-block w-3 h-3 rounded-sm bg-muted mr-1" /> = Already booked
+                      <span className="inline-block w-3 h-3 rounded-sm bg-muted mr-1" /> = Unavailable (blocked or already booked)
                     </p>
                   )}
                 </div>
