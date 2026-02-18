@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Lock, Stethoscope, Eye, EyeOff } from "lucide-react";
+import { Lock, Stethoscope, Eye, EyeOff, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface AdminLoginProps {
   onLogin: () => void;
@@ -10,14 +11,43 @@ export default function AdminLogin({ onLogin }: AdminLoginProps) {
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email === "admin@dentacare.com" && password === "admin123") {
+    setError("");
+    setLoading(true);
+
+    try {
+      const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (authError || !data.user) {
+        setError("Invalid email or password.");
+        setLoading(false);
+        return;
+      }
+
+      // Check if user has admin role
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", data.user.id)
+        .eq("role", "admin")
+        .maybeSingle();
+
+      if (!roleData) {
+        await supabase.auth.signOut();
+        setError("Access denied. Admin privileges required.");
+        setLoading(false);
+        return;
+      }
+
       onLogin();
-    } else {
-      setError("Invalid credentials. Try admin@dentacare.com / admin123");
+    } catch {
+      setError("Something went wrong. Please try again.");
     }
+
+    setLoading(false);
   };
 
   return (
@@ -37,7 +67,7 @@ export default function AdminLogin({ onLogin }: AdminLoginProps) {
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <label className="block text-sm font-medium mb-2">Email</label>
-              <input className="input-dental" type="email" placeholder="admin@dentacare.com"
+              <input className="input-dental" type="email" placeholder="your@email.com"
                 value={email} onChange={e => setEmail(e.target.value)} required />
             </div>
             <div>
@@ -56,16 +86,11 @@ export default function AdminLogin({ onLogin }: AdminLoginProps) {
               <div className="text-xs text-red-600 p-3 rounded-lg bg-red-50 border border-red-200">{error}</div>
             )}
 
-            <button type="submit" className="btn-primary w-full">
-              <Lock className="w-4 h-4" /> Sign In
+            <button type="submit" className="btn-primary w-full" disabled={loading}>
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+              {loading ? "Signing in..." : "Sign In"}
             </button>
           </form>
-
-          <div className="mt-6 p-3 rounded-lg text-xs text-muted-foreground" style={{ background: "hsl(var(--muted))" }}>
-            <p className="font-medium mb-1">Demo credentials:</p>
-            <p>Email: admin@dentacare.com</p>
-            <p>Password: admin123</p>
-          </div>
         </div>
       </div>
     </div>
